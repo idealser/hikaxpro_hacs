@@ -5,6 +5,7 @@ from asyncio import timeout
 import contextlib
 from datetime import timedelta
 import logging
+import time
 
 import hikaxpro
 import xmltodict
@@ -278,6 +279,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def update_listener(hass: HomeAssistant, config_entry: ConfigEntry):
     """Update listener."""
     await hass.config_entries.async_reload(config_entry.entry_id)
+
+
+class _NoPeripherals:
+    """LOCAL PATCH: stands in for the exDevStatus response, which is no longer requested."""
+
+    ex_dev_status = None
 
 
 class HikAxProDataUpdateCoordinator(DataUpdateCoordinator):
@@ -561,8 +568,9 @@ class HikAxProDataUpdateCoordinator(DataUpdateCoordinator):
             zones[zone.zone.id] = zone.zone
         self.zones = zones
         _LOGGER.debug("Zones: %s", zone_response)
-        # peripherals from exDevStatus
-        devices_status = self._load_ext_devices_status()
+        # LOCAL PATCH: peripherals (sirens, keypads, repeaters, relays) are not polled at all -
+        # only sub systems, zones and the hub battery are needed, which keeps a poll at 2-3 requests.
+        devices_status = _NoPeripherals()
         relays_status: dict[int, OutputStatusFull] = {}
         sirens: dict[int, Siren] = {}
         keypads: dict[int, Keypad] = {}
@@ -609,25 +617,15 @@ class HikAxProDataUpdateCoordinator(DataUpdateCoordinator):
         self._update_host_diagnostics()
 
     def _update_host_diagnostics(self) -> None:
-        """Best-effort poll of host / AC / hub battery status APIs."""
-        try:
-            self.host_status = self.axpro.host_status()
-        except Exception:  # noqa: BLE001 - panel firmware varies
-            _LOGGER.debug("host status unavailable", exc_info=True)
-            self.host_status = None
-
-        try:
-            endpoint = self.axpro.build_url(
-                f"http://{self.host}/ISAPI/SecurityCP/status/acPowerStatus", True
-            )
-            response = self.axpro.make_request(endpoint, "GET", None, True)
-            if response.status_code == 200:
-                self.ac_power_status = response.json()
-            else:
-                self.ac_power_status = None
-        except Exception:  # noqa: BLE001
-            _LOGGER.debug("AC power status unavailable", exc_info=True)
-            self.ac_power_status = None
+        """Best-effort poll of the hub battery status API."""
+        # LOCAL PATCH: host status and AC power status are not polled.
+        self.host_status = None
+        self.ac_power_status = None
+        # LOCAL PATCH: the hub battery changes slowly - poll it every 5 minutes, not every cycle.
+        now = time.monotonic()
+        if now < getattr(self, "_battery_poll_at", 0.0):
+            return
+        self._battery_poll_at = now + 300
 
         try:
             endpoint = self.axpro.build_url(

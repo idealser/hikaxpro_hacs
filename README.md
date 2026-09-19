@@ -1,6 +1,14 @@
 # hikaxpro_hacs
 HACS repository of Hikvision Ax Pro integration for home assistant
 
+> **Fork note (idealser/hikaxpro_hacs, based on v3.4.0).** This fork polls only what is needed for
+> arming state, zones and batteries, so the scan interval can be lowered to 2-3 seconds without
+> loading the panel:
+> - every poll: `status/subSystems` and `status/zones` (2 requests, about 0.4 s in total);
+> - hub battery (`status/batteries`): every 5 minutes;
+> - not polled at all: peripherals (`exDevStatus`: sirens, keypads, repeaters, relays), host status
+>   and AC power status - their entities stay unavailable and can be disabled.
+
 **Type**: Local integration (not using any cloud connection - only connecting to device)
 **IOT Class**: `local_polling` aka Pulling data from device in predefined interval (default 30 sec)
 
