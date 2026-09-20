@@ -187,6 +187,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigEntry):
 
     hass.services.async_register(DOMAIN, "arm_away_force", _service_arm_away_force)
 
+    async def _service_arm_home_force(call):
+        coordinator = _coordinator_for_service(hass, call)
+        sub_id = call.data.get("sub_id")
+        await coordinator.async_arm_home(
+            sub_id=int(sub_id) if sub_id is not None else None, force=True
+        )
+
+    hass.services.async_register(DOMAIN, "arm_home_force", _service_arm_home_force)
+
     async def _service_control_siren(call):
         coordinator = _coordinator_for_service(hass, call)
         siren_id = int(call.data["siren_id"])
@@ -736,13 +745,13 @@ class HikAxProDataUpdateCoordinator(DataUpdateCoordinator):
         if not accepted and last_error is not None:
             raise last_error
 
-    async def async_arm_home(self, sub_id: int | None = None, with_bypass: bool = False):
-        """Arm alarm panel in home state."""
+    async def async_arm_home(
+        self, sub_id: int | None = None, with_bypass: bool = False, force: bool = False
+    ):
+        """Arm alarm panel in home state; force skips the exit delay (arm_home_force service)."""
         if with_bypass or self.auto_bypass_on_arm:
             await self.async_bypass_blocking_zones()
-        # LOCAL PATCH: nobody leaves when arming home, so the exit delay (and its beeping) is
-        # pointless - always force.
-        await self._async_arm(self.axpro.arm_home, sub_id, force=True)
+        await self._async_arm(self.axpro.arm_home, sub_id, force)
 
     async def async_arm_away(
         self, sub_id: int | None = None, with_bypass: bool = False, force: bool = False
