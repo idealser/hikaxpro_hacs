@@ -439,11 +439,8 @@ class HikAxProDataUpdateCoordinator(DataUpdateCoordinator):
 
     def load_relays(self):
         """Load relays."""
-        devices = self._load_relays()
-        if devices is not None:
-            self.relays = {}
-            for item in devices.list:
-                self.relays[item.output.id] = item.output
+        # LOCAL PATCH: relays are not used - no config request, no switch entities.
+        self.relays = {}
 
     def _load_relays(self) -> OutputConfList:
         endpoint = self.axpro.build_url(

@@ -58,6 +58,9 @@ async def async_setup_entry(
     devices.extend(build_host_sensors(coordinator, entry.entry_id))
     if coordinator.zone_status is not None:
         for zone in coordinator.zone_status.zone_list:
+            # LOCAL PATCH: zones without a linked detector get no device and no entities
+            if zone.zone.status is Status.NOT_RELATED:
+                continue
             zone_config = coordinator.devices.get(zone.zone.id)
             detector_type: DetectorType | None
             if zone_config is not None:
