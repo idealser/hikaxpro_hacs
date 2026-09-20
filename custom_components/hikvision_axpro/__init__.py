@@ -5,6 +5,7 @@ from asyncio import timeout
 import contextlib
 from datetime import timedelta
 import logging
+import re
 import time
 
 import hikaxpro
@@ -29,7 +30,7 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
 from homeassistant.helpers.service import async_register_admin_service
@@ -279,6 +280,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def update_listener(hass: HomeAssistant, config_entry: ConfigEntry):
     """Update listener."""
     await hass.config_entries.async_reload(config_entry.entry_id)
+
+
+# The panel refuses commands for about 5 s while it runs its arming process.
+PANEL_BUSY_RETRIES = 8
+PANEL_BUSY_RETRY_DELAY = 1.0
+
+
+def _sub_status_code(err: Exception) -> str | None:
+    """Extract the ISAPI subStatusCode ("arming", "armedStatus", "lowPrivilege", ...) from an error."""
+    match = re.search(r'"subStatusCode"\s*:\s*"(\w+)"', str(err))
+    return match.group(1) if match else None
 
 
 class _NoPeripherals:
@@ -554,6 +566,8 @@ class HikAxProDataUpdateCoordinator(DataUpdateCoordinator):
                     status = AlarmControlPanelState.ARMED_HOME
                 elif subsys.arming == Arming.VACATION:
                     status = AlarmControlPanelState.ARMED_VACATION
+                elif subsys.arming == Arming.ARMING:
+                    status = AlarmControlPanelState.ARMING
             _LOGGER.debug("SubSystem status: %s", subsys_resp)
         except:
             _LOGGER.warning("Error getting status: %s", status_json)
@@ -653,33 +667,62 @@ class HikAxProDataUpdateCoordinator(DataUpdateCoordinator):
         except ConnectionError as error:
             raise UpdateFailed(error) from error
 
+    async def _async_panel_command(self, method, sub_id: int | None) -> None:
+        """Send an arm / disarm command and cope with the panel's transient refusals.
+
+        The panel answers HTTP 400 with a subStatusCode instead of queueing a command:
+        - "arming": it is in its ~5 s arming process and refuses every command. A second arm
+          request after that window force-arms immediately (skips the exit delay), so retry
+          for a few seconds instead of failing.
+        - "armedStatus": the area is already in the requested state - nothing to do.
+        - "lowPrivilege" for the whole panel (sub system 0xffffffff): the account may only
+          control individual areas, so fall back to commanding each area.
+        """
+        for attempt in range(PANEL_BUSY_RETRIES + 1):
+            try:
+                await self.hass.async_add_executor_job(method, sub_id)
+            except Exception as err:  # noqa: BLE001 - the library raises its own error type
+                sub_status = _sub_status_code(err)
+                if sub_status == "armedStatus":
+                    _LOGGER.debug("Panel is already in the requested state")
+                elif sub_status == "arming" and attempt < PANEL_BUSY_RETRIES:
+                    await asyncio.sleep(PANEL_BUSY_RETRY_DELAY)
+                    continue
+                elif sub_status == "lowPrivilege" and sub_id is None and self.sub_systems:
+                    await self._async_command_each_area(method)
+                else:
+                    raise HomeAssistantError(f"AX PRO refused the command: {err}") from err
+            break
+        await self.async_request_refresh()
+
+    async def _async_command_each_area(self, method) -> None:
+        """Send a command to every area the account is allowed to control."""
+        accepted = 0
+        last_error: Exception | None = None
+        for area_id in list(self.sub_systems):
+            try:
+                await self._async_panel_command(method, area_id)
+                accepted += 1
+            except HomeAssistantError as err:
+                last_error = err
+        if not accepted and last_error is not None:
+            raise last_error
+
     async def async_arm_home(self, sub_id: int | None = None, with_bypass: bool = False):
         """Arm alarm panel in home state."""
         if with_bypass or self.auto_bypass_on_arm:
             await self.async_bypass_blocking_zones()
-        is_success = await self.hass.async_add_executor_job(self.axpro.arm_home, sub_id)
-
-        if is_success:
-            await self._async_update_data()
-            await self.async_request_refresh()
+        await self._async_panel_command(self.axpro.arm_home, sub_id)
 
     async def async_arm_away(self, sub_id: int | None = None, with_bypass: bool = False):
         """Arm alarm panel in away state."""
         if with_bypass or self.auto_bypass_on_arm:
             await self.async_bypass_blocking_zones()
-        is_success = await self.hass.async_add_executor_job(self.axpro.arm_away, sub_id)
-
-        if is_success:
-            await self._async_update_data()
-            await self.async_request_refresh()
+        await self._async_panel_command(self.axpro.arm_away, sub_id)
 
     async def async_disarm(self, sub_id: int | None = None):
         """Disarm alarm control panel."""
-        is_success = await self.hass.async_add_executor_job(self.axpro.disarm, sub_id)
-
-        if is_success:
-            await self._async_update_data()
-            await self.async_request_refresh()
+        await self._async_panel_command(self.axpro.disarm, sub_id)
 
     def _zones_blocking_arm(self) -> list[int]:
         """Return zone IDs that typically prevent arming when left open/triggered."""

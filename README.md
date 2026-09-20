@@ -8,6 +8,15 @@ HACS repository of Hikvision Ax Pro integration for home assistant
 > - hub battery (`status/batteries`): every 5 minutes;
 > - not polled at all: peripherals (`exDevStatus`: sirens, keypads, repeaters, relays), host status
 >   and AC power status - their entities stay unavailable and can be disabled.
+>
+> Arm / disarm commands also cope with the panel's HTTP 400 answers instead of failing:
+> - `arming` (the panel refuses commands for ~5 s while it runs its arming process): retried once a
+>   second for up to 8 s. A second arm request after that window force-arms immediately, skipping
+>   the exit delay and its beeping - so "arm, then arm again" is now a reliable quiet night arming;
+> - `armedStatus` (already in that state): treated as success;
+> - `lowPrivilege` on the whole-panel entity (`0xffffffff`): falls back to commanding each area.
+>
+> The `arming` sub system state is shown as `arming` instead of `unknown`.
 
 **Type**: Local integration (not using any cloud connection - only connecting to device)
 **IOT Class**: `local_polling` aka Pulling data from device in predefined interval (default 30 sec)

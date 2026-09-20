@@ -197,6 +197,8 @@ class HikAxProSubPanel(CoordinatorEntity, AlarmControlPanelEntity):
             return AlarmControlPanelState.ARMED_HOME
         if self.sys.arming == Arming.VACATION:
             return AlarmControlPanelState.ARMED_VACATION
+        if self.sys.arming == Arming.ARMING:
+            return AlarmControlPanelState.ARMING
         if self.sys.arming == Arming.DISARM:
             return AlarmControlPanelState.DISARMED
         return None
