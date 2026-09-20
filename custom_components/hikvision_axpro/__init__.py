@@ -277,6 +277,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, config_entry: ConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Allow removing a device from the UI once it has no entities left.
+
+    Unused zones, relays and peripherals that are no longer polled leave empty devices behind.
+    """
+    entity_registry = er.async_get(hass)
+    return not er.async_entries_for_device(
+        entity_registry, device_entry.id, include_disabled_entities=True
+    )
+
+
 async def update_listener(hass: HomeAssistant, config_entry: ConfigEntry):
     """Update listener."""
     await hass.config_entries.async_reload(config_entry.entry_id)
