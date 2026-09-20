@@ -298,6 +298,9 @@ async def update_listener(hass: HomeAssistant, config_entry: ConfigEntry):
 # The panel refuses commands for about 5 s while it runs its arming process.
 PANEL_BUSY_RETRIES = 8
 PANEL_BUSY_RETRY_DELAY = 1.0
+# Arm home is followed by a forcing request; the panel refuses it for the first ~5 s.
+STAY_FORCE_DELAY = 4.5
+PANEL_FORCE_RETRY_DELAY = 0.4
 
 
 def _sub_status_code(err: Exception) -> str | None:
@@ -677,7 +680,9 @@ class HikAxProDataUpdateCoordinator(DataUpdateCoordinator):
         except ConnectionError as error:
             raise UpdateFailed(error) from error
 
-    async def _async_panel_command(self, method, sub_id: int | None) -> None:
+    async def _async_panel_command(
+        self, method, sub_id: int | None, retry_delay: float = PANEL_BUSY_RETRY_DELAY
+    ) -> bool:
         """Send an arm / disarm command and cope with the panel's transient refusals.
 
         The panel answers HTTP 400 with a subStatusCode instead of queueing a command:
@@ -688,15 +693,18 @@ class HikAxProDataUpdateCoordinator(DataUpdateCoordinator):
         - "lowPrivilege" for the whole panel (sub system 0xffffffff): the account may only
           control individual areas, so fall back to commanding each area.
         """
-        for attempt in range(PANEL_BUSY_RETRIES + 1):
+        accepted = True
+        give_up_at = time.monotonic() + PANEL_BUSY_RETRIES * PANEL_BUSY_RETRY_DELAY
+        while True:
             try:
                 await self.hass.async_add_executor_job(method, sub_id)
             except Exception as err:  # noqa: BLE001 - the library raises its own error type
                 sub_status = _sub_status_code(err)
                 if sub_status == "armedStatus":
                     _LOGGER.debug("Panel is already in the requested state")
-                elif sub_status == "arming" and attempt < PANEL_BUSY_RETRIES:
-                    await asyncio.sleep(PANEL_BUSY_RETRY_DELAY)
+                    accepted = False
+                elif sub_status == "arming" and time.monotonic() < give_up_at:
+                    await asyncio.sleep(retry_delay)
                     continue
                 elif sub_status == "lowPrivilege" and sub_id is None and self.sub_systems:
                     await self._async_command_each_area(method)
@@ -704,6 +712,7 @@ class HikAxProDataUpdateCoordinator(DataUpdateCoordinator):
                     raise HomeAssistantError(f"AX PRO refused the command: {err}") from err
             break
         await self.async_request_refresh()
+        return accepted
 
     async def _async_command_each_area(self, method) -> None:
         """Send a command to every area the account is allowed to control."""
@@ -722,7 +731,13 @@ class HikAxProDataUpdateCoordinator(DataUpdateCoordinator):
         """Arm alarm panel in home state."""
         if with_bypass or self.auto_bypass_on_arm:
             await self.async_bypass_blocking_zones()
-        await self._async_panel_command(self.axpro.arm_home, sub_id)
+        if not await self._async_panel_command(self.axpro.arm_home, sub_id):
+            return
+        # LOCAL PATCH: nobody leaves when arming home, so the exit delay (and its beeping) is
+        # pointless. A second arm request force-arms immediately; the panel only accepts it once
+        # its ~5 s arming process is over, and _async_panel_command retries until then.
+        await asyncio.sleep(STAY_FORCE_DELAY)
+        await self._async_panel_command(self.axpro.arm_home, sub_id, PANEL_FORCE_RETRY_DELAY)
 
     async def async_arm_away(self, sub_id: int | None = None, with_bypass: bool = False):
         """Arm alarm panel in away state."""
