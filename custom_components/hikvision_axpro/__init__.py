@@ -178,6 +178,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigEntry):
         DOMAIN, "arm_home_with_bypass", _service_arm_home_with_bypass
     )
 
+    async def _service_arm_away_force(call):
+        coordinator = _coordinator_for_service(hass, call)
+        sub_id = call.data.get("sub_id")
+        await coordinator.async_arm_away(
+            sub_id=int(sub_id) if sub_id is not None else None, force=True
+        )
+
+    hass.services.async_register(DOMAIN, "arm_away_force", _service_arm_away_force)
+
     async def _service_control_siren(call):
         coordinator = _coordinator_for_service(hass, call)
         siren_id = int(call.data["siren_id"])
@@ -731,19 +740,28 @@ class HikAxProDataUpdateCoordinator(DataUpdateCoordinator):
         """Arm alarm panel in home state."""
         if with_bypass or self.auto_bypass_on_arm:
             await self.async_bypass_blocking_zones()
-        if not await self._async_panel_command(self.axpro.arm_home, sub_id):
-            return
         # LOCAL PATCH: nobody leaves when arming home, so the exit delay (and its beeping) is
-        # pointless. A second arm request force-arms immediately; the panel only accepts it once
-        # its ~5 s arming process is over, and _async_panel_command retries until then.
-        await asyncio.sleep(STAY_FORCE_DELAY)
-        await self._async_panel_command(self.axpro.arm_home, sub_id, PANEL_FORCE_RETRY_DELAY)
+        # pointless - always force.
+        await self._async_arm(self.axpro.arm_home, sub_id, force=True)
 
-    async def async_arm_away(self, sub_id: int | None = None, with_bypass: bool = False):
-        """Arm alarm panel in away state."""
+    async def async_arm_away(
+        self, sub_id: int | None = None, with_bypass: bool = False, force: bool = False
+    ):
+        """Arm alarm panel in away state; force skips the exit delay (arm_away_force service)."""
         if with_bypass or self.auto_bypass_on_arm:
             await self.async_bypass_blocking_zones()
-        await self._async_panel_command(self.axpro.arm_away, sub_id)
+        await self._async_arm(self.axpro.arm_away, sub_id, force)
+
+    async def _async_arm(self, method, sub_id: int | None, force: bool) -> None:
+        """Arm, and when forcing send the second request that skips the exit delay.
+
+        A second arm request force-arms immediately; the panel only accepts it once its ~5 s
+        arming process is over, and _async_panel_command retries until then.
+        """
+        if not await self._async_panel_command(method, sub_id) or not force:
+            return
+        await asyncio.sleep(STAY_FORCE_DELAY)
+        await self._async_panel_command(method, sub_id, PANEL_FORCE_RETRY_DELAY)
 
     async def async_disarm(self, sub_id: int | None = None):
         """Disarm alarm control panel."""

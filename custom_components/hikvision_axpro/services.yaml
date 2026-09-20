@@ -57,6 +57,26 @@ arm_away_with_bypass:
       required: false
       selector:
         text:
+arm_away_force:
+  name: Arm away (forced)
+  description: >-
+    Arm away and skip the exit delay: a second arm request is sent about 5 s after the first one,
+    which makes the panel arm immediately. Use it only when nobody has to leave any more
+    (e.g. an automation that runs after everybody has left).
+  fields:
+    sub_id:
+      name: Subsystem ID
+      description: Optional area/subsystem id
+      required: false
+      selector:
+        number:
+          min: 1
+          mode: box
+    config_entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
 arm_home_with_bypass:
   name: Arm home with bypass
   description: Bypass open/triggered zones then arm stay/home
